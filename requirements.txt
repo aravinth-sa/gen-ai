@@ -2,6 +2,7 @@ openai
 langchain
 faiss-cpu
 python-dotenv
+langchain-openai
 streamlit
 pandas
 tqdm
