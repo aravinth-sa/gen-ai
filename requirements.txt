@@ -1,5 +1,6 @@
 openai
 langchain
+langchain-community
 faiss-cpu
 python-dotenv
 langchain-openai
@@ -7,4 +8,4 @@ streamlit
 pandas
 tqdm
 tiktoken
-langchain-community
+
