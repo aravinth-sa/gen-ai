@@ -10,14 +10,18 @@ from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
 from langchain.document_loaders import DataFrameLoader
 from langchain.prompts import PromptTemplate
-from langchain.chains import RetrievalQA
 import streamlit as st
+from langchain.agents import initialize_agent, AgentType
+from langchain.memory import ConversationBufferMemory
+from langchain.tools import Tool
+from langchain.schema.runnable import RunnableMap
+import logging
 
 # Set the API key
 # Load API Key
 load_dotenv()
-#openai_api_key = os.getenv("OPENAI_API_KEY")
-openai_api_key = st.secrets["OPENAI_API_KEY"]
+openai_api_key = os.getenv("OPENAI_API_KEY")
+#openai_api_key = st.secrets["OPENAI_API_KEY"]
 
 # Load data
 @st.cache_resource
@@ -75,7 +79,103 @@ if "messages" not in st.session_state:
 
 vectorstore = load_and_embed()
 retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+
+# Define custom functions
+def get_product_price(product_code: str) -> str:
+    df = pd.read_csv("dataset100.csv")
+    product = df[df["pid"] == product_code]
+    if not product.empty:
+        price = product.iloc[0]["retail_price"]
+        name = product.iloc[0]["product_name"]
+        return f"The price of {name} (Product Code: {product_code}) is ${price}."
+    else:
+        return "Product not found."
+
+def get_product_description(product_code: str) -> str:
+    df = pd.read_csv("dataset100.csv")
+    product = df[df["pid"] == product_code]
+    if not product.empty:
+        desc = product.iloc[0]["description"]
+        name = product.iloc[0]["product_name"]
+        return f"Description for {name} (Product Code: {product_code}): {desc}"
+    else:
+        return "Product not found."
+
+# Bind functions with LCEL (LangChain Expression Language)
+
+price_tool = Tool.from_function(
+    func=get_product_price,
+    name="get_product_price",
+    description="Get the price of a product by product code."
+)
+
+desc_tool = Tool.from_function(
+    func=get_product_description,
+    name="get_product_description",
+    description="Get the description of a product by product code."
+)
+
 qa_chain = get_qa_chain(retriever)
+
+# LCEL chain composition
+chain = RunnableMap({
+    "qa": qa_chain,
+    "price": price_tool,
+    "description": desc_tool
+})
+
+# Agent setup using tools and chain
+#tools = [price_tool, desc_tool]
+# The previous agent setup only uses the tools (price/description) and does NOT use the RetrievalQA chain (which leverages the vectorstore embeddings).
+# To ensure the agent uses the embedded vector information, you should add a tool that wraps the qa_chain.
+
+
+def qa_tool_func(question):
+    logging.info(f"qa_tool_func called with question: {question}")
+    df = pd.read_csv("dataset100.csv")
+    # Check if question contains a known product code
+    for pid in df["pid"].astype(str):
+        if pid in question:
+            logging.info(f"Matched product code: {pid}")
+            context = df[df["pid"].astype(str) == pid]["text"].values
+            if len(context) > 0:
+                logging.info("Returning context by product code match.")
+                return context[0]
+    # Otherwise, try to match product name (case-insensitive, partial match)
+    question_lower = question.lower()
+    for name in df["product_name"].astype(str):
+        name_lower = name.lower()
+        if name_lower in question_lower or question_lower in name_lower:
+            logging.info(f"Matched product name: {name}")
+            context = df[df["product_name"].astype(str).str.lower() == name_lower]["text"].values
+            if len(context) > 0:
+                logging.info("Returning context by product name match.")
+                return context[0]
+    # Fallback to vector search
+    logging.info("No product code or name match found. Using vector search.")
+    result = qa_chain({"query": question})["result"]
+    logging.info("Returning result from vector search.")
+    return result
+
+qa_tool = Tool.from_function(
+    func=qa_tool_func,
+    name="product_qa",
+    description="Answer questions about products using embedded product information, product code, or product name."
+)
+
+tools = [price_tool, desc_tool, qa_tool]
+
+agent = initialize_agent(
+    tools=tools,
+    llm=llm,
+    agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
+    memory=memory,
+    verbose=True,
+    handle_parsing_errors=True
+)
 
 for msg in st.session_state.messages:
     if msg["role"] == "user":
@@ -85,20 +185,24 @@ for msg in st.session_state.messages:
 
 user_input = st.text_input("Your message", key="chat_input", placeholder="Type your question here...")
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+
 if "last_user_input" not in st.session_state:
     st.session_state.last_user_input = ""
 
 if user_input and user_input != st.session_state.last_user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
 
-    response = qa_chain({"query": user_input})
-    answer = response["result"]
+    logging.info(f"User input: {user_input}")
 
-    # Print documents and context
-    with st.expander("Retrieved Documents and Context", expanded=False):
-        for i, doc in enumerate(response.get("source_documents", [])):
-            st.markdown(f"**Document {i+1}:**")
-            st.code(doc.page_content)
+    try:
+        response = agent({"input": user_input})
+        logging.info(f"Agent raw response: {response}")
+        answer = response.get("output", "No output from agent.")
+    except Exception as e:
+        logging.error(f"Error during agent response: {e}")
+        answer = f"Sorry, there was an error processing your request: {e}"
 
     st.session_state.messages.append({"role": "assistant", "content": answer})
 
