@@ -20,12 +20,41 @@ import logging
 # Set the API key
 # Load API Key
 load_dotenv()
-#openai_api_key = os.getenv("OPENAI_API_KEY")
-openai_api_key = st.secrets["OPENAI_API_KEY"]
+openai_api_key = os.getenv("OPENAI_API_KEY")
+#openai_api_key = st.secrets["OPENAI_API_KEY"]
 
+############################################
+# Load data first using PineCone
+############################################
+import pinecone
+from langchain.vectorstores import Pinecone
 
+@st.cache_resource
+def load_and_embed_pinecone():
+    # Load data
+    df = pd.read_csv("dataset100.csv")
+    df["text"] = df.apply(
+        lambda row: f"Product Code: {row['pid']}\nProduct: {row['product_name']}\nDescription: {row['description']}\nCategory: {row['product_category_tree']}\nPrice: ${row['retail_price']}",
+        axis=1
+    )
+    docs = DataFrameLoader(df[["text"]], page_content_column="text").load()
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    split_docs = splitter.split_documents(docs)
+    embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
 
-# Load data first
+    # Pinecone setup
+    pinecone_api_key = os.getenv("PINECONE_API_KEY")
+    pinecone_env = os.getenv("PINECONE_ENVIRONMENT")
+    pinecone.init(api_key=pinecone_api_key, environment=pinecone_env)
+    index_name = "product-index"
+    if index_name not in pinecone.list_indexes():
+        pinecone.create_index(index_name, dimension=1536)  # 1536 for OpenAI embeddings
+
+    vectorstore = Pinecone.from_documents(split_docs, embeddings, index_name=index_name)
+    return vectorstore
+############################################
+# Load data first using FAISS
+############################################
 @st.cache_resource
 def load_and_embed():
     df = pd.read_csv("dataset100.csv")
@@ -86,7 +115,11 @@ def get_qa_chain(retriever):
 # Define a function to get product price
 def get_product_price(product_code: str) -> str:
     df = pd.read_csv("dataset100.csv")
-    product = df[df["pid"] == product_code]
+    product = df[
+        (df["pid"] == product_code) |
+        (df["product_name"].astype(str).str.contains(product_code, case=False, na=False)) |
+        (df["description"].astype(str).str.contains(product_code, case=False, na=False))
+    ]
     if not product.empty:
         price = product.iloc[0]["retail_price"]
         name = product.iloc[0]["product_name"]
@@ -97,7 +130,11 @@ def get_product_price(product_code: str) -> str:
 # Define a function to get product description
 def get_product_description(product_code: str) -> str:
     df = pd.read_csv("dataset100.csv")
-    product = df[df["pid"] == product_code]
+    product = df[
+        (df["pid"] == product_code) |
+        (df["product_name"].astype(str).str.contains(product_code, case=False, na=False)) |
+        (df["description"].astype(str).str.contains(product_code, case=False, na=False))
+    ]
     if not product.empty:
         desc = product.iloc[0]["description"]
         name = product.iloc[0]["product_name"]
@@ -230,5 +267,23 @@ def handle_chat_interaction():
 
 # Call the chat interaction handler
 handle_chat_interaction()
+
+import streamlit as st
+from langchain.memory import ConversationBufferMemory
+from data import load_data
+from embedding import get_faiss_vectorstore
+from agent import get_qa_chain, get_agent
+from tools import get_tools
+from ui import handle_chat_interaction
+
+df = load_data()
+vectorstore = get_faiss_vectorstore(df)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+qa_chain = get_qa_chain(retriever)
+tools = get_tools(qa_chain)
+agent = get_agent(tools, memory)
+
+handle_chat_interaction(agent)
 
 
