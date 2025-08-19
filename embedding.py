@@ -27,10 +27,11 @@ def get_faiss_vectorstore(df):
 def get_pinecone_vectorstore(df):
     split_docs = prepare_documents(df)
     embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
-    pinecone_api_key = os.getenv("PINECONE_API_KEY")
-    pinecone_env = os.getenv("PINECONE_ENVIRONMENT")
+    pinecone_api_key = os.getenv("pinecone_api_key")
+    pinecone_env = os.getenv("pinecone_environment")
     pinecone.init(api_key=pinecone_api_key, environment=pinecone_env)
-    index_name = "product-index"
+    index_name = "sample"
     if index_name not in pinecone.list_indexes():
         pinecone.create_index(index_name, dimension=1536)
     return Pinecone.from_documents(split_docs, embeddings, index_name=index_name)
+

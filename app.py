@@ -5,9 +5,10 @@ from embedding import get_faiss_vectorstore
 from agent import get_qa_chain, get_agent
 from tools import get_tools
 from ui import handle_chat_interaction
+from embedding import get_pinecone_vectorstore
 
 df = load_data()
-vectorstore = get_faiss_vectorstore(df)
+vectorstore = get_pinecone_vectorstore(df)
 retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
 qa_chain = get_qa_chain(retriever)
