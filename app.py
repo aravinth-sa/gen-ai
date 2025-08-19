@@ -20,10 +20,12 @@ import logging
 # Set the API key
 # Load API Key
 load_dotenv()
-openai_api_key = os.getenv("OPENAI_API_KEY")
-#openai_api_key = st.secrets["OPENAI_API_KEY"]
+#openai_api_key = os.getenv("OPENAI_API_KEY")
+openai_api_key = st.secrets["OPENAI_API_KEY"]
 
-# Load data
+
+
+# Load data first
 @st.cache_resource
 def load_and_embed():
     df = pd.read_csv("dataset100.csv")
@@ -41,6 +43,12 @@ def load_and_embed():
     vectorstore = FAISS.from_documents(split_docs, embeddings)
     return vectorstore
 
+vectorstore = load_and_embed()
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+
+# A custom prompt made for chain
 custom_prompt = PromptTemplate(
     input_variables=["context", "question"],
     template="""
@@ -72,18 +80,10 @@ def get_qa_chain(retriever):
 
 
 
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "Hello! Ask me anything about the product catalog."}
-    ]
 
-vectorstore = load_and_embed()
-retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+########### FUNCTIONS ############
 
-memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
-
-# Define custom functions
+# Define a function to get product price
 def get_product_price(product_code: str) -> str:
     df = pd.read_csv("dataset100.csv")
     product = df[df["pid"] == product_code]
@@ -94,6 +94,7 @@ def get_product_price(product_code: str) -> str:
     else:
         return "Product not found."
 
+# Define a function to get product description
 def get_product_description(product_code: str) -> str:
     df = pd.read_csv("dataset100.csv")
     product = df[df["pid"] == product_code]
@@ -103,36 +104,7 @@ def get_product_description(product_code: str) -> str:
         return f"Description for {name} (Product Code: {product_code}): {desc}"
     else:
         return "Product not found."
-
-# Bind functions with LCEL (LangChain Expression Language)
-
-price_tool = Tool.from_function(
-    func=get_product_price,
-    name="get_product_price",
-    description="Get the price of a product by product code."
-)
-
-desc_tool = Tool.from_function(
-    func=get_product_description,
-    name="get_product_description",
-    description="Get the description of a product by product code."
-)
-
-qa_chain = get_qa_chain(retriever)
-
-# LCEL chain composition
-chain = RunnableMap({
-    "qa": qa_chain,
-    "price": price_tool,
-    "description": desc_tool
-})
-
-# Agent setup using tools and chain
-#tools = [price_tool, desc_tool]
-# The previous agent setup only uses the tools (price/description) and does NOT use the RetrievalQA chain (which leverages the vectorstore embeddings).
-# To ensure the agent uses the embedded vector information, you should add a tool that wraps the qa_chain.
-
-
+    
 def qa_tool_func(question):
     logging.info(f"qa_tool_func called with question: {question}")
     df = pd.read_csv("dataset100.csv")
@@ -160,11 +132,40 @@ def qa_tool_func(question):
     logging.info("Returning result from vector search.")
     return result
 
+########### TOOLS ###########
+
+# Bind functions with LCEL (LangChain Expression Language)
+price_tool = Tool.from_function(
+    func=get_product_price,
+    name="get_product_price",
+    description="Get the price of a product by product code."
+)
+
+desc_tool = Tool.from_function(
+    func=get_product_description,
+    name="get_product_description",
+    description="Get the description of a product by product code."
+)
+
+qa_chain = get_qa_chain(retriever)
+
 qa_tool = Tool.from_function(
     func=qa_tool_func,
     name="product_qa",
     description="Answer questions about products using embedded product information, product code, or product name."
 )
+
+# LCEL chain composition
+#chain = RunnableMap({
+#    "qa": qa_chain,
+#    "price": price_tool,
+#    "description": desc_tool
+#})
+
+# Agent setup using tools and chain
+#tools = [price_tool, desc_tool]
+# The previous agent setup only uses the tools (price/description) and does NOT use the RetrievalQA chain (which leverages the vectorstore embeddings).
+# To ensure the agent uses the embedded vector information, you should add a tool that wraps the qa_chain.
 
 tools = [price_tool, desc_tool, qa_tool]
 
@@ -177,36 +178,57 @@ agent = initialize_agent(
     handle_parsing_errors=True
 )
 
-for msg in st.session_state.messages:
-    if msg["role"] == "user":
-        st.markdown(f"**You:** {msg['content']}")
-    else:
-        st.markdown(f"**Assistant:** {msg['content']}")
+def display_chat_history():
+    # Initialize messages in session state if not present
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    # Display previous messages in the chat
+    for msg in st.session_state.messages:
+        if msg["role"] == "user":
+            st.markdown(f"**You:** {msg['content']}")
+        else:
+            st.markdown(f"**Assistant:** {msg['content']}")
 
-user_input = st.text_input("Your message", key="chat_input", placeholder="Type your question here...")
+def get_user_input():
+    # Get user input from the text box
+    return st.text_input("Your message", key="chat_input", placeholder="Type your question here...")
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+def process_user_input(user_input):
+    # Set up logging
+    logging.basicConfig(level=logging.INFO)
 
-if "last_user_input" not in st.session_state:
-    st.session_state.last_user_input = ""
+    # Initialize last_user_input in session state if not present
+    if "last_user_input" not in st.session_state:
+        st.session_state.last_user_input = ""
 
-if user_input and user_input != st.session_state.last_user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
+    # If there is new user input, process it
+    if user_input and user_input != st.session_state.last_user_input:
+        st.session_state.messages.append({"role": "user", "content": user_input})
 
-    logging.info(f"User input: {user_input}")
+        logging.info(f"User input: {user_input}")
 
-    try:
-        response = agent({"input": user_input})
-        logging.info(f"Agent raw response: {response}")
-        answer = response.get("output", "No output from agent.")
-    except Exception as e:
-        logging.error(f"Error during agent response: {e}")
-        answer = f"Sorry, there was an error processing your request: {e}"
+        try:
+            # Get response from the agent
+            response = agent({"input": user_input})
+            logging.info(f"Agent raw response: {response}")
+            answer = response.get("output", "No output from agent.")
+        except Exception as e:
+            logging.error(f"Error during agent response: {e}")
+            answer = f"Sorry, there was an error processing your request: {e}"
 
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+        # Append assistant's answer to the chat history
+        st.session_state.messages.append({"role": "assistant", "content": answer})
 
-    st.session_state.last_user_input = user_input
-    st.rerun()
+        # Update last_user_input and rerun the app to refresh UI
+        st.session_state.last_user_input = user_input
+        st.rerun()
+
+def handle_chat_interaction():
+    display_chat_history()
+    user_input = get_user_input()
+    process_user_input(user_input)
+
+# Call the chat interaction handler
+handle_chat_interaction()
 
 
