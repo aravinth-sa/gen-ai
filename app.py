@@ -1,20 +1,20 @@
-## Integration with OpenAI API
-
-import os
-import pandas as pd
-from dotenv import load_dotenv
-from langchain_openai import OpenAIEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chat_models import ChatOpenAI
-from langchain.chains import RetrievalQA
-from langchain.document_loaders import DataFrameLoader
-from langchain.prompts import PromptTemplate
 import streamlit as st
-from langchain.agents import initialize_agent, AgentType
 from langchain.memory import ConversationBufferMemory
-from langchain.tools import Tool
-from langchain.schema.runnable import RunnableMap
+from data import load_data
+from embedding import get_faiss_vectorstore
+from agent import get_qa_chain, get_agent
+from tools import get_tools
+from ui import handle_chat_interaction
+
+df = load_data()
+vectorstore = get_faiss_vectorstore(df)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+qa_chain = get_qa_chain(retriever)
+tools = get_tools(qa_chain)
+agent = get_agent(tools, memory)
+
+handle_chat_interaction(agent)
 import logging
 
 # Set the API key
