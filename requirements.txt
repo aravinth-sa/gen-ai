@@ -9,3 +9,4 @@ pandas
 tqdm
 tiktoken
 pinecone
+langchain-pinecone

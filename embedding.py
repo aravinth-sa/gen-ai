@@ -1,11 +1,12 @@
 import os
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
-from langchain.vectorstores import FAISS, Pinecone
+from langchain.vectorstores import FAISS, Pinecone as LangchainPinecone
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.document_loaders import DataFrameLoader
 import pandas as pd
-import pinecone
+from pinecone import Pinecone, ServerlessSpec
+from langchain_pinecone import PineconeVectorStore
 
 load_dotenv()
 openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -26,12 +27,31 @@ def get_faiss_vectorstore(df):
 
 def get_pinecone_vectorstore(df):
     split_docs = prepare_documents(df)
-    embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
+    embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key, model="text-embedding-3-small")
     pinecone_api_key = os.getenv("pinecone_api_key")
-    pinecone_env = os.getenv("pinecone_environment")
-    pinecone.init(api_key=pinecone_api_key, environment=pinecone_env)
-    index_name = "sample"
-    if index_name not in pinecone.list_indexes():
-        pinecone.create_index(index_name, dimension=1536)
-    return Pinecone.from_documents(split_docs, embeddings, index_name=index_name)
+    pinecone_cloud = "aws"
+    pinecone_region = os.getenv("pinecone_environment", "us-east-1")
+    index_name = "product-index"
+
+    pc = Pinecone(api_key=pinecone_api_key)
+    print(f"Connecting to Pinecone index: {pc.list_indexes().names()}")
+    # Check if index exists
+    if index_name not in pc.list_indexes().names():
+        pc.create_index(
+            name=index_name,
+            dimension=1536,  # Ensure this matches your embedding dimension
+            metric='cosine',
+            spec=ServerlessSpec(cloud=pinecone_cloud, region=pinecone_region)
+        )
+    else:
+        print(f"Pinecone index '{index_name}' already exists.")
+        # Optionally, check the dimension and warn if it does not match
+
+    # Get the actual index object
+    pinecone_index = pc.Index(index_name)
+
+    # Pass the Pinecone index object to Langchain PineconeVectorStore
+    vectorstore = PineconeVectorStore(index=pinecone_index, embedding=embeddings)
+    #vectorstore.add_documents(split_docs)
+    return vectorstore
 

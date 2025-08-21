@@ -33,19 +33,31 @@ def get_product_description(product_code: str) -> str:
 def qa_tool_func(question, qa_chain):
     logging.info(f"qa_tool_func called with question: {question}")
     df = pd.read_csv("dataset100.csv")
+    # Check if question contains a known product code
     for pid in df["pid"].astype(str):
         if pid in question:
+            logging.info(f"Matched product code: {pid}")
             context = df[df["pid"].astype(str) == pid]["text"].values
             if len(context) > 0:
+                logging.info("Returning context by product code match.")
                 return context[0]
+    # Otherwise, try to match product name (case-insensitive, partial match)
     question_lower = question.lower()
     for name in df["product_name"].astype(str):
         name_lower = name.lower()
         if name_lower in question_lower or question_lower in name_lower:
+            logging.info(f"Matched product name: {name}")
             context = df[df["product_name"].astype(str).str.lower() == name_lower]["text"].values
             if len(context) > 0:
+                logging.info("Returning context by product name match.")
                 return context[0]
-    result = qa_chain({"query": question})["result"]
+    # Fallback to vector search
+    logging.info("No product code or name match found. Using vector search.")
+    result = qa_chain({"query": question}).get("result", None)
+    if result is None or result.strip() == "":
+        logging.warning("Vector search did not return a result. Returning fallback message.")
+        return "Sorry, I could not find an answer to your question."
+    logging.info("Returning result from vector search.")
     return result
 
 def get_tools(qa_chain):
